@@ -36,6 +36,7 @@ class ThreadSafeConnections():
   def connect(self, host, port):
     log("Shared: [*] Opening HTTP connection to %s:%s" % (host, port))
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.settimeout(30) # timeout if no response
     server.connect((host, port))
     return server
 

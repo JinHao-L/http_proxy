@@ -9,14 +9,14 @@ from tasks import ProxyTask, TelemetryTask
 def main(argv):
   if (len(argv) < 3):
     print('usage: proxy.py <port> <image-flag> <attack-flag>')
-    invalid_usage('[*] Error: Insufficient argument')
+    print('[*] Error: Insufficient argument')
     sys.exit(2)
 
   try:
     port = int(argv[0])
-  except:
+  except Exception:
     print('usage: proxy.py <port> <image-flag> <attack-flag>')
-    invalid_usage('[*] Error: invalid port: [ %s ]' % argv[0])
+    print('[*] Error: invalid port: [ %s ]' % argv[0])
     sys.exit(2)
 
   filters = []
@@ -45,8 +45,8 @@ def main(argv):
       client, addr = proxy.accept()
       task = ProxyTask(addr, client, connections, filters)
       task.daemon = True
-      task.start()
       threads.append(task)
+      task.start()
 
     except KeyboardInterrupt:
       log("\n[*] Stopping proxy...")

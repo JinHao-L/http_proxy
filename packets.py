@@ -15,22 +15,26 @@ class GenericPacket:
         self.headers[key] = val
       
       self.body = body
-    except:
+    except Exception:
       traceback.print_exc()
       raise HTTPException(500, 'Internal Server Error')
 
   def set_content(self, body):
     self.body = body
 
+    # Does not support chunked encoding
+    # Only use content-length
+    te = self.headers.get(b'Transfer-Encoding')
+    if (te):
+      te_values = [x.strip() for x in filter(lambda x: x.strip() != b'chunked', te.split(b","))]
+      if (len(te_values) > 0):
+        self.headers[b'Transfer-Encoding'] = b', '.join(te_values)
+      else:
+        del self.headers[b'Transfer-Encoding']
+    self.headers[b'Content-Length'] = str(len(body)).encode()
+
   def validate(self):
     return True
-  
-  def get_content_length(self):
-    try:
-      return int(self.headers.get(b'Content-Length') or 0)
-    except:
-      traceback.print_exc()
-      raise HTTPException(400, 'Bad Request') # Content-Length not integer
 
   def protocol_line(self):
     return self.protocol
@@ -50,7 +54,7 @@ class RequestPacket(GenericPacket):
     try:
       super().__init__(head, body)
       self.method, self.url, self.ver = self.protocol.split(b' ')
-    except:
+    except Exception:
       traceback.print_exc()
       raise HTTPException(400, 'Bad Request')
 
@@ -58,17 +62,14 @@ class RequestPacket(GenericPacket):
     """Check request packet for any violations"""
     # Mismatched host
     if b'Host' not in self.headers or self.headers[b'Host'] not in self.url:
-      traceback.print_exc()
       raise HTTPException(400, 'Bad Request')
 
     # Unsupported version
     if self.ver not in [b'HTTP/1.1', b'HTTP/1.0']:
-      traceback.print_exc()
       raise HTTPException(505, 'HTTP Version Not Supported')
 
     # Unsupported method
-    if self.method not in [b'HEAD', b'GET', b'PUT', b'POST', b'DELETE', b'CONNECT', b'OPTIONS', b'TRACE']:
-      traceback.print_exc()
+    if self.method not in [b'HEAD', b'GET', b'PUT', b'POST', b'DELETE']:
       raise HTTPException(405, 'Method Not Allowed')
   
   def get_host_n_port(self):
@@ -78,7 +79,7 @@ class RequestPacket(GenericPacket):
       if (':' in host):
         pos = host.find(':')
         return (host[:pos], int(host[pos + 1:]))
-    except:
+    except Exception:
       traceback.print_exc()
       raise HTTPException(400, 'Bad Request') # no host header or invalid port
 
@@ -93,14 +94,7 @@ class ResponsePacket(GenericPacket):
     try:
       super().__init__(head, body)
       self.ver, self.code, self.status = self.protocol.split(b' ', 2)
-    except:
-      traceback.print_exc()
-      raise HTTPException(500, 'Internal Server Error')
-
-  def get_content_length(self):
-    try:
-      return int(self.headers.get(b'Content-Length') or 0)
-    except:
+    except Exception:
       traceback.print_exc()
       raise HTTPException(500, 'Internal Server Error')
 
@@ -113,7 +107,7 @@ class ErrorResponsePacket:
     self.code = code
     self.message = message
 
-  def __str__(self):
+  def encode(self):
     html = f"""  
     <?xml version="1.0" encoding="iso-8859-1"?>
     <!DOCTYPE html>
@@ -134,5 +128,5 @@ class ErrorResponsePacket:
     res += f'Date: {datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")}\r\n\r\n'
     res += html
 
-    return res
+    return res.encode()
 
