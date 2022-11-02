@@ -1,5 +1,7 @@
-from exceptions import HTTPException
+from urllib.parse import urlparse
 from datetime import datetime
+
+from exceptions import HTTPException
 from logger import error_trace
 
 class GenericPacket:
@@ -60,7 +62,8 @@ class RequestPacket(GenericPacket):
   def validate(self):
     """Check request packet for any violations"""
     # Mismatched host
-    if b'Host' not in self.headers or self.headers[b'Host'] not in self.url:
+    netloc = urlparse(self.url).netloc
+    if b'Host' not in self.headers or (netloc and self.headers[b'Host'] != netloc):
       raise HTTPException(400, 'Bad Request')
 
     # Unsupported version
@@ -68,7 +71,7 @@ class RequestPacket(GenericPacket):
       raise HTTPException(505, 'HTTP Version Not Supported')
 
     # Unsupported method
-    if self.method not in [b'HEAD', b'GET', b'PUT', b'POST', b'DELETE']:
+    if self.method not in [b'HEAD', b'GET', b'PUT', b'POST', b'DELETE', b'PATCH']:
       raise HTTPException(405, 'Method Not Allowed')
   
   def get_host_n_port(self):

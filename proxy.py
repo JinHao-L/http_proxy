@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 import sys
 import socket
-from logger import log
+from typing import List
 
 from connections import ThreadSafeConnections
 from tasks import ProxyTask, TelemetryTask
+from logger import log
+from extensions import *
 
 def main(argv):
   if (len(argv) < 3):
@@ -14,15 +16,20 @@ def main(argv):
 
   try:
     port = int(argv[0])
+      
+    # Install extensions
+    extensions: List[PacketTransformer] = []
+    if (int(argv[1])):
+      extensions.append(ImageChangeTransformer("https://www.comp.nus.edu.sg/~chanmc/change.jpg"))
+    if (int(argv[2])):
+      extensions.append(AttackTransformer("You are being attacked"))
+
   except Exception:
     print('usage: proxy.py <port> <image-flag> <attack-flag>')
-    print('[*] Error: invalid port: [ %s ]' % argv[0])
+    print('<port> <image-flag> <attack-flag> must be valid integers')
     sys.exit(2)
 
-  filters = []
-  image_sub_flag = argv[1] == 1
-  attack_flag = argv[1] == 1
-
+  # Start proxy listener
   try:
     proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy.bind(('', port))
@@ -33,17 +40,20 @@ def main(argv):
     print(e)
     sys.exit(2)
 
+  # Create shared storage
   connections = ThreadSafeConnections()
-  threads = []
-  
-  telemetry = TelemetryTask(connections)
+  threads: List[ProxyTask] = []
+
+  # Create telemetry task which runs every second
+  telemetry = TelemetryTask(connections, 1)
   telemetry.daemon = True
   telemetry.start()
 
+  # Start new proxy task for each proxy request
   while True:
     try:
       client, addr = proxy.accept()
-      task = ProxyTask(addr, client, connections, filters)
+      task = ProxyTask(addr, client, connections, extensions)
       task.daemon = True
       threads.append(task)
       task.start()

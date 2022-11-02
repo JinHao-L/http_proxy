@@ -1,20 +1,22 @@
 import socket
-
+from typing import List, Tuple
 from threading import Thread, Event
+
 from exceptions import HTTPException
 from packets import RequestPacket, ResponsePacket, ErrorResponsePacket
 from connections import ThreadSafeConnections
 from logger import log, error_trace
+from extensions import PacketTransformer
 
 BUFFER_SIZE = 65536
 
 class ProxyTask(Thread):
-  def __init__(self, addr, client, connections, filters):
+  def __init__(self, addr: Tuple[str, int], client: socket.socket, connections: ThreadSafeConnections, extensions: List[PacketTransformer]):
     Thread.__init__(self)
     self.addr = addr
     self.client = client
     self.connections = connections
-    self.filters = filters
+    self.extensions = extensions
 
   def run(self):
     # self.log("[*] New connection from %s:%s" % self.addr)
@@ -33,13 +35,16 @@ class ProxyTask(Thread):
         return
 
       self.log("[-->]", request.protocol_line().decode())
-  
-      # Identify domain and port to connect
-      host, port = request.get_host_n_port()
-      origin = request.headers[b'Host'].decode()
+
+      for mapper in self.extensions:
+        request = mapper.incoming(request)
+
+      # Identify host and port to connect
+      host_port = request.get_host_n_port()
+      domain = request.headers[b'Host'].decode()
 
       try:
-        server = self.connections.start(origin, host, port)
+        server = self.connections.start(domain, host_port)
       except socket.gaierror:
         error_trace()
         self.handleError(HTTPException(404, 'Not Found'))
@@ -54,11 +59,11 @@ class ProxyTask(Thread):
       except socket.error:
         # recreate the socket and try reconnect
         try:
-          server = self.connections.restart(origin)
+          server = self.connections.restart(host_port)
           server.send(request.encode())
         except socket.error:
           error_trace()
-          self.connections.close(origin)
+          self.connections.close(host_port)
           self.handleError(err)
           return
     
@@ -68,11 +73,14 @@ class ProxyTask(Thread):
 
       response, err = self.parse_packet(server, data, ResponsePacket)
 
+      for mapper in self.extensions:
+        response = mapper.outgoing(response)
+
       # By default connection kept open
       if (b'close' in [request.headers.get(b'Connection'), response and response.headers.get(b'Connection')]):
-        self.connections.close(origin, len(response.body))
+        self.connections.close(host_port, len(response.body))
       else:
-        self.connections.release(origin, len(response.body))
+        self.connections.release(host_port, len(response.body))
 
       if (err):
         error_trace()
@@ -87,8 +95,8 @@ class ProxyTask(Thread):
       self.handleError(e)
     except socket.timeout:
       error_trace()
-      if (origin):
-        self.connections.close(origin)
+      if (host_port):
+        self.connections.close(host_port)
       self.handleError(HTTPException(504, 'Gateway Timeout'))
     except Exception:
       # Unknown exception
@@ -166,13 +174,14 @@ class ProxyTask(Thread):
 
 
 class TelemetryTask(Thread):
-  def __init__(self, connections):
+  def __init__(self, connections, freq=1):
     Thread.__init__(self)
+    self.freq = freq
     self.stopped = Event()
     self.connections = connections
 
   def run(self):
-    while not self.stopped.wait(1):
+    while not self.stopped.wait(self.freq):
       self.connections.routine()
 
   def stop(self):
