@@ -1,6 +1,6 @@
 from exceptions import HTTPException
 from datetime import datetime
-import traceback
+from logger import error_trace
 
 class GenericPacket:
   def __init__(self, head, body = b''):
@@ -10,13 +10,13 @@ class GenericPacket:
 
       # Get header key-val pairs
       self.headers = {}
-      for line in  header_str.split(b'\r\n'):
-        key, val = line.split(b': ')
+      for line in header_str.split(b'\r\n'):
+        key, val = line.split(b': ', 1)
         self.headers[key] = val
       
       self.body = body
     except Exception:
-      traceback.print_exc()
+      error_trace()
       raise HTTPException(500, 'Internal Server Error')
 
   def set_content(self, body):
@@ -48,14 +48,13 @@ class GenericPacket:
   def __str__(self):
     return str(self.encode())
 
-
 class RequestPacket(GenericPacket):
   def __init__(self, head, body = b''):
     try:
       super().__init__(head, body)
-      self.method, self.url, self.ver = self.protocol.split(b' ')
+      self.method, self.url, self.ver = self.protocol.split(b' ', 2)
     except Exception:
-      traceback.print_exc()
+      error_trace()
       raise HTTPException(400, 'Bad Request')
 
   def validate(self):
@@ -80,7 +79,7 @@ class RequestPacket(GenericPacket):
         pos = host.find(':')
         return (host[:pos], int(host[pos + 1:]))
     except Exception:
-      traceback.print_exc()
+      error_trace()
       raise HTTPException(400, 'Bad Request') # no host header or invalid port
 
     return (host, 443) if self.url.startswith(b'https') else (host, 80)
@@ -88,45 +87,36 @@ class RequestPacket(GenericPacket):
   def protocol_line(self):
     return self.method + b' ' + self.url + b' ' + self.ver
 
-
 class ResponsePacket(GenericPacket):
   def __init__(self, head, body = b''):
     try:
       super().__init__(head, body)
       self.ver, self.code, self.status = self.protocol.split(b' ', 2)
     except Exception:
-      traceback.print_exc()
+      error_trace()
       raise HTTPException(500, 'Internal Server Error')
 
   def protocol_line(self):
     return self.ver + b' ' + self.code + b' ' + self.status
 
-
-class ErrorResponsePacket:
+class ErrorResponsePacket(ResponsePacket):
   def __init__(self, code, message):
-    self.code = code
-    self.message = message
+    head = f'HTTP/1.1 {code} {message}\r\n'
+    head += 'Content-Type: text/html\r\n'
+    head += 'Connection: close\r\n'
+    head += f'Date: {datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")}'
+    super().__init__(head.encode())
 
-  def encode(self):
-    html = f"""  
+    body = f"""  
     <?xml version="1.0" encoding="iso-8859-1"?>
     <!DOCTYPE html>
     <html lang="en">
       <head>
-        <title>{self.code} - {self.message}</title>
+        <title>{code} - {message}</title>
       </head>
       <body>
-        <h1>{self.code} - {self.message}</h1>
+        <h1>{code} - {message}</h1>
       </body>
     </html>
     """
-
-    res = f'HTTP/1.1 {self.code} {self.message}\r\n'
-    res += 'Content-Type: text/html\r\n'
-    res += f'Content-Length: {len(html)}\r\n'
-    res += 'Connection: close\r\n'
-    res += f'Date: {datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")}\r\n\r\n'
-    res += html
-
-    return res.encode()
-
+    self.set_content(body.encode())

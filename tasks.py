@@ -1,11 +1,10 @@
-import traceback
 import socket
 
 from threading import Thread, Event
 from exceptions import HTTPException
 from packets import RequestPacket, ResponsePacket, ErrorResponsePacket
 from connections import ThreadSafeConnections
-from logger import log
+from logger import log, error_trace
 
 BUFFER_SIZE = 65536
 
@@ -18,7 +17,7 @@ class ProxyTask(Thread):
     self.filters = filters
 
   def run(self):
-    self.log("[*] New connection from %s:%s" % self.addr)
+    # self.log("[*] New connection from %s:%s" % self.addr)
     try:
       data = self.client.recv(BUFFER_SIZE)
       if not data:
@@ -42,24 +41,24 @@ class ProxyTask(Thread):
       try:
         server = self.connections.start(origin, host, port)
       except socket.gaierror:
-        traceback.print_exc()
+        error_trace()
         self.handleError(HTTPException(404, 'Not Found'))
         return
       except socket.herror:
-        traceback.print_exc()
+        error_trace()
         self.handleError(HTTPException(404, 'Not Found'))
         return
       
       try:
         server.send(request.encode())
       except socket.error:
-        traceback.print_exc()
         # recreate the socket and try reconnect
         try:
-          server = self.connections.restart(origin, host, port)
+          server = self.connections.restart(origin)
           server.send(request.encode())
         except socket.error:
-          traceback.print_exc()
+          error_trace()
+          self.connections.close(origin)
           self.handleError(err)
           return
     
@@ -71,12 +70,12 @@ class ProxyTask(Thread):
 
       # By default connection kept open
       if (b'close' in [request.headers.get(b'Connection'), response and response.headers.get(b'Connection')]):
-        self.connections.close(origin, host, port, len(response.body))
+        self.connections.close(origin, len(response.body))
       else:
-        self.connections.release(origin, host, port, len(response.body))
+        self.connections.release(origin, len(response.body))
 
       if (err):
-        traceback.print_exc()
+        error_trace()
         self.handleError(err)
         return
 
@@ -84,26 +83,25 @@ class ProxyTask(Thread):
       self.log("[<--]", response.protocol_line().decode())
 
     except HTTPException as e:
-      traceback.print_exc()
+      error_trace()
       self.handleError(e)
     except socket.timeout:
-      traceback.print_exc()
+      error_trace()
+      if (origin):
+        self.connections.close(origin)
       self.handleError(HTTPException(504, 'Gateway Timeout'))
-    except KeyboardInterrupt:
-      traceback.print_exc()
-      pass
     except Exception:
       # Unknown exception
-      traceback.print_exc()
+      error_trace()
       self.handleError(HTTPException(500, 'Internal Server Error'))
     finally:
-      self.log("[*] Close connection from %s:%s" % self.addr)
+      # self.log("[*] Close connection from %s:%s" % self.addr)
       self.client.close()
 
   def handleError(self, http_err):
-      self.log(http_err)
-      res = ErrorResponsePacket(http_err.code, http_err.message)
-      self.client.send(res.encode())
+      response = ErrorResponsePacket(http_err.code, http_err.message)
+      self.client.send(response.encode())
+      self.log("[<--]", response.protocol_line().decode())
 
   def parse_packet(self, conn, data, pkt_cls_type):
     head, body = data.split(b'\r\n\r\n', 1)
@@ -116,7 +114,7 @@ class ProxyTask(Thread):
         try:
           body_len = int(packet.headers[b'Content-Length'])
         except ValueError:
-          traceback.print_exc()
+          error_trace()
           raise HTTPException(400, 'Bad Request')
 
         while(len(body) < body_len):
@@ -133,7 +131,7 @@ class ProxyTask(Thread):
           try:
             chunk_len = int(chunk_len.decode(errors='ignore'), 16)
           except ValueError():
-            traceback.print_exc()
+            error_trace()
             raise HTTPException(400, 'Bad Request')
 
           while(len(body) < chunk_len):
@@ -161,7 +159,7 @@ class ProxyTask(Thread):
       return None, e
 
   def log(self, *message):
-    log("%s:%s -:" % (self.addr[0], self.addr[1]), *message)
+    log("%s:%s  -:" % (self.addr[0], self.addr[1]), *message)
 
   def terminate(self):
     self.client.close()
