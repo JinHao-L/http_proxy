@@ -43,6 +43,10 @@ class AttackTransformer(PacketTransformer):
     </html>
     """.format(content)
 
+  def incoming(self, req: RequestPacket) -> RequestPacket:
+    req.should_forward = False
+    return req
+
   def outgoing(self, res: ResponsePacket) -> ResponsePacket:
     # Transform res to an target output
     res.set_content(self.html.encode())

@@ -43,49 +43,53 @@ class ProxyTask(Thread):
       host_port = request.get_host_n_port()
       domain = request.headers[b'Host'].decode()
 
-      try:
-        server = self.connections.start(domain, host_port)
-      except socket.gaierror:
-        error_trace()
-        self.handleError(HTTPException(404, 'Not Found'))
-        return
-      except socket.herror:
-        error_trace()
-        self.handleError(HTTPException(404, 'Not Found'))
-        return
-      
-      try:
-        server.send(request.encode())
-      except socket.error:
-        # recreate the socket and try reconnect
+      if request.should_forward:
         try:
-          server = self.connections.restart(host_port)
+          server = self.connections.start(domain, host_port)
+        except socket.gaierror:
+          error_trace()
+          self.handleError(HTTPException(404, 'Not Found'))
+          return
+        except socket.herror:
+          error_trace()
+          self.handleError(HTTPException(404, 'Not Found'))
+          return
+        
+        try:
           server.send(request.encode())
         except socket.error:
+          # recreate the socket and try reconnect
+          try:
+            server = self.connections.restart(host_port)
+            server.send(request.encode())
+          except socket.error:
+            error_trace()
+            self.connections.close(host_port)
+            self.handleError(err)
+            return
+      
+        data = b''
+        while data.find(b'\r\n\r\n') == -1:
+          data += server.recv(BUFFER_SIZE)
+
+        response, err = self.parse_packet(server, data, ResponsePacket)
+
+        # By default connection kept open
+        if (b'close' in [request.headers.get(b'Connection'), response and response.headers.get(b'Connection')]):
+          self.connections.close(host_port, len(response.body))
+        else:
+          self.connections.release(host_port, len(response.body))
+
+        if (err):
           error_trace()
-          self.connections.close(host_port)
           self.handleError(err)
           return
-    
-      data = b''
-      while data.find(b'\r\n\r\n') == -1:
-        data += server.recv(BUFFER_SIZE)
-
-      response, err = self.parse_packet(server, data, ResponsePacket)
+      else:
+        response = ErrorResponsePacket(418, "I'm a teapot") # Dont want to handle this request
+        self.connections.release(host_port, len(response.body))
 
       for mapper in self.extensions:
         response = mapper.outgoing(response)
-
-      # By default connection kept open
-      if (b'close' in [request.headers.get(b'Connection'), response and response.headers.get(b'Connection')]):
-        self.connections.close(host_port, len(response.body))
-      else:
-        self.connections.release(host_port, len(response.body))
-
-      if (err):
-        error_trace()
-        self.handleError(err)
-        return
 
       self.client.send(response.encode())
       self.log("[<--]", response.protocol_line().decode())

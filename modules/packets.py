@@ -55,6 +55,7 @@ class RequestPacket(GenericPacket):
     try:
       super().__init__(head, body)
       self.method, self.url, self.ver = self.protocol.split(b' ', 2)
+      self.should_forward = True
     except Exception:
       error_trace()
       raise HTTPException(400, 'Bad Request')
@@ -64,14 +65,17 @@ class RequestPacket(GenericPacket):
     # Mismatched host
     netloc = urlparse(self.url).netloc
     if b'Host' not in self.headers or (netloc and self.headers[b'Host'] != netloc):
+      self.should_forward = False
       raise HTTPException(400, 'Bad Request')
 
     # Unsupported version
     if self.ver not in [b'HTTP/1.1', b'HTTP/1.0']:
+      self.should_forward = False
       raise HTTPException(505, 'HTTP Version Not Supported')
 
     # Unsupported method
     if self.method not in [b'HEAD', b'GET', b'PUT', b'POST', b'DELETE', b'PATCH']:
+      self.should_forward = False
       raise HTTPException(405, 'Method Not Allowed')
   
   def get_host_n_port(self):
