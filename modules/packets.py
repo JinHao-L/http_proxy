@@ -1,8 +1,8 @@
 from urllib.parse import urlparse
 from datetime import datetime
 
-from exceptions import HTTPException
-from logger import error_trace
+from modules.exceptions import HTTPException
+from modules.logger import error_trace
 
 class GenericPacket:
   def __init__(self, head, body = b''):
@@ -47,6 +47,9 @@ class GenericPacket:
     payload += b'\r\n\r\n' + self.body
     return payload
   
+  def payload_size(self):
+    return len(self.body)
+
   def __str__(self):
     return str(self.encode())
 

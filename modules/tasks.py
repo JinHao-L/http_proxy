@@ -1,119 +1,128 @@
 import socket
+import ssl
 from typing import List, Tuple
-from threading import Thread, Event
+from threading import Thread
 
-from exceptions import HTTPException
-from packets import RequestPacket, ResponsePacket, ErrorResponsePacket
-from connections import ThreadSafeConnections
-from logger import log, error_trace
-from extensions import PacketTransformer
+from modules.exceptions import HTTPException
+from modules.packets import RequestPacket, ResponsePacket, ErrorResponsePacket
+from modules.telemetry import TelemetryStore
+from modules.logger import log, error_trace
+from modules.extensions import PacketTransformer
 
 BUFFER_SIZE = 65536
 
 class ProxyTask(Thread):
-  def __init__(self, addr: Tuple[str, int], client: socket.socket, connections: ThreadSafeConnections, extensions: List[PacketTransformer]):
+  def __init__(self, addr: Tuple[str, int], client: socket.socket, store: TelemetryStore, extensions: List[PacketTransformer]):
     Thread.__init__(self)
+    # self.log("[*] New connection from %s:%s" % self.addr)
     self.addr = addr
-    self.client = client
-    self.connections = connections
+    self.telemetry = store
     self.extensions = extensions
 
+    self.client = client
+    self.server = None
+    self.request = None
+    self.response = None
+
   def run(self):
-    # self.log("[*] New connection from %s:%s" % self.addr)
     try:
-      data = self.client.recv(BUFFER_SIZE)
-      if not data:
-        return
-      while (data.find(b'\r\n\r\n') == -1):
-        data += self.client.recv(BUFFER_SIZE)
-
-      request, err = self.parse_packet(self.client, data, RequestPacket)
-
-      # error handled all together at the bottom segment
-      if (err):
-        self.handleError(err)
-        return
-
-      self.log("[-->]", request.protocol_line().decode())
-
-      for mapper in self.extensions:
-        request = mapper.incoming(request)
-
-      # Identify host and port to connect
-      host_port = request.get_host_n_port()
-      domain = request.headers[b'Host'].decode()
-
-      if request.should_forward:
-        try:
-          server = self.connections.start(domain, host_port)
-        except socket.gaierror:
-          error_trace()
-          self.handleError(HTTPException(404, 'Not Found'))
-          return
-        except socket.herror:
-          error_trace()
-          self.handleError(HTTPException(404, 'Not Found'))
-          return
-        
-        try:
-          server.send(request.encode())
-        except socket.error:
-          # recreate the socket and try reconnect
-          try:
-            server = self.connections.restart(host_port)
-            server.send(request.encode())
-          except socket.error:
-            error_trace()
-            self.connections.close(host_port)
-            self.handleError(err)
-            return
-      
+      # Handle incoming request
+      try: 
         data = b''
         while data.find(b'\r\n\r\n') == -1:
-          data += server.recv(BUFFER_SIZE)
+          data += self.client.recv(BUFFER_SIZE)
 
-        response, err = self.parse_packet(server, data, ResponsePacket)
+        self.request, err = self.parse_packet(self.client, data, RequestPacket)
+      except socket.timeout:
+        self.response = ErrorResponsePacket(408, 'Request Timeout')
+        self.send_response()
+        return
 
-        # By default connection kept open
-        if (b'close' in [request.headers.get(b'Connection'), response and response.headers.get(b'Connection')]):
-          self.connections.close(host_port, len(response.body))
-        else:
-          self.connections.release(host_port, len(response.body))
+      if (err):
+        self.response = ErrorResponsePacket(err.code, err.message)
+        self.send_response()
+        return
+
+      self.log("[-->]", self.request.protocol_line().decode())
+
+      for mapper in self.extensions:
+        self.request = mapper.incoming(self.request)
+
+      # Identify host and port to connect
+      host, port = self.request.get_host_n_port()
+
+      if self.request.should_forward:
+        try:
+          self.server = self.connect(host, port)
+        except socket.gaierror:
+          self.response = ErrorResponsePacket(404, 'Not Found')
+          self.send_response()
+          return
+        except socket.herror:
+          self.response = ErrorResponsePacket(404, 'Not Found')
+          self.send_response()
+          return
+        
+        self.server.send(self.request.encode())
+
+        # Handle incoming response
+        try: 
+          data = b''
+          while data.find(b'\r\n\r\n') == -1:
+            data += self.server.recv(BUFFER_SIZE)
+
+          self.response, err = self.parse_packet(self.server, data, ResponsePacket)
+        except socket.timeout:
+          self.response = ErrorResponsePacket(504, 'Gateway Timeout') # Server timeout
+          self.send_response()
+          return
 
         if (err):
           error_trace()
-          self.handleError(err)
+          self.response = ErrorResponsePacket(502, 'Bad Gateway') # Server sent bad request
+          self.send_response()
           return
       else:
-        response = ErrorResponsePacket(418, "I'm a teapot") # Dont want to handle this request
-        self.connections.release(host_port, len(response.body))
+        self.response = ErrorResponsePacket(418, "I'm a teapot") # Don't want to handle this request
 
       for mapper in self.extensions:
-        response = mapper.outgoing(response)
+        self.response = mapper.outgoing(self.response)
 
-      self.client.send(response.encode())
-      self.log("[<--]", response.protocol_line().decode())
+      self.send_response()
 
     except HTTPException as e:
       error_trace()
-      self.handleError(e)
-    except socket.timeout:
-      error_trace()
-      if (host_port):
-        self.connections.close(host_port)
-      self.handleError(HTTPException(504, 'Gateway Timeout'))
+      self.response = ErrorResponsePacket(e.code, e.message)
+      self.send_response()
     except Exception:
       # Unknown exception
       error_trace()
-      self.handleError(HTTPException(500, 'Internal Server Error'))
+      self.response = ErrorResponsePacket(500, 'Internal Server Error')
+      self.send_response()
     finally:
-      # self.log("[*] Close connection from %s:%s" % self.addr)
-      self.client.close()
+      self.terminate()
 
-  def handleError(self, http_err):
-      response = ErrorResponsePacket(http_err.code, http_err.message)
-      self.client.send(response.encode())
-      self.log("[<--]", response.protocol_line().decode())
+  def connect(self, host, port):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.settimeout(30) # timeout if no response
+    server.connect((host, port))
+
+    if(port == 443):
+      context = ssl.create_default_context()
+      server = context.wrap_socket(server, server_hostname=host)
+
+    return server
+
+  def send_response(self):
+    if self.response:
+      self.client.send(self.response.encode())
+      self.log("[<--]", self.response.protocol_line().decode())
+
+    if self.request and self.response:
+      # Telemetry update
+      origin = self.request.headers.get(b'Referer') or self.request.url
+      self.telemetry.update(origin.decode(), self.response.payload_size())
+
 
   def parse_packet(self, conn, data, pkt_cls_type):
     head, body = data.split(b'\r\n\r\n', 1)
@@ -174,20 +183,7 @@ class ProxyTask(Thread):
     log("%s:%s  -:" % (self.addr[0], self.addr[1]), *message)
 
   def terminate(self):
+    # self.log("[*] Close connection from %s:%s" % self.addr)
     self.client.close()
-
-
-class TelemetryTask(Thread):
-  def __init__(self, connections, freq=1):
-    Thread.__init__(self)
-    self.freq = freq
-    self.stopped = Event()
-    self.connections = connections
-
-  def run(self):
-    while not self.stopped.wait(self.freq):
-      self.connections.routine()
-
-  def stop(self):
-    self.stopped.set()
-
+    if (self.server):
+      self.server.close()

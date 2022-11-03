@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from packets import RequestPacket, ResponsePacket
+from modules.packets import RequestPacket, ResponsePacket
 
 class PacketTransformer():
   """
@@ -18,7 +18,11 @@ class ImageChangeTransformer(PacketTransformer):
   def __init__(self, image):
     super().__init__()
     self.image = image
-    self.host = urlparse(image).hostname
+    url_seg = urlparse(image)
+    if(url_seg.port in [443, 80]):
+      self.host = url_seg.hostname
+    else:
+      self.host = url_seg.netloc
 
   def incoming(self, req: RequestPacket) -> RequestPacket:
     if (req.url.split(b'.')[-1] in [b'png', b'jpeg', b'jpg', b'ico', b'gif']):
@@ -49,6 +53,8 @@ class AttackTransformer(PacketTransformer):
 
   def outgoing(self, res: ResponsePacket) -> ResponsePacket:
     # Transform res to an target output
+    res.code = b'200'
+    res.status = b'OK'
     res.set_content(self.html.encode())
     res.headers.pop(b'Content-Encoding', None)
     return res

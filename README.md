@@ -10,7 +10,7 @@ python3 proxy.py 8080 1 0
 ```
 * `<port>` should be a valid open port
 * flags should either be 1 or 0
-  * Setting the `<image-flag>` will substitute all image req to https://www.comp.nus.edu.sg/~chanmc/change.jpg (see `ImageChangeTransformer` in `modules/extensions`)
+  * Setting the `<image-flag>` will substitute all image req to http://ocna0.d2.comp.nus.edu.sg:50000/change.jpg (see `ImageChangeTransformer` in `modules/extensions`)
   * Setting the `<attack-flag>` will transform all output response to a custom HTML resource. (see `AttackTransformer` in `modules/extensions`)
 
 <br/>

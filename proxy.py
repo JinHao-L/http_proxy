@@ -3,10 +3,10 @@ import sys
 import socket
 from typing import List
 
-from connections import ThreadSafeConnections
-from tasks import ProxyTask, TelemetryTask
-from logger import log
-from extensions import *
+from modules.telemetry import TelemetryStore, TelemetryTask
+from modules.tasks import ProxyTask
+from modules.logger import log
+from modules.extensions import *
 
 def main(argv):
   if (len(argv) < 3):
@@ -20,7 +20,7 @@ def main(argv):
     # Install extensions
     extensions: List[PacketTransformer] = []
     if (int(argv[1])):
-      extensions.append(ImageChangeTransformer("https://www.comp.nus.edu.sg/~chanmc/change.jpg"))
+      extensions.append(ImageChangeTransformer("http://ocna0.d2.comp.nus.edu.sg:50000/change.jpg"))
     if (int(argv[2])):
       extensions.append(AttackTransformer("You are being attacked"))
 
@@ -41,11 +41,11 @@ def main(argv):
     sys.exit(2)
 
   # Create shared storage
-  connections = ThreadSafeConnections()
+  store = TelemetryStore()
   threads: List[ProxyTask] = []
 
   # Create telemetry task which runs every second
-  telemetry = TelemetryTask(connections, 1)
+  telemetry = TelemetryTask(store, 1)
   telemetry.daemon = True
   telemetry.start()
 
@@ -53,7 +53,7 @@ def main(argv):
   while True:
     try:
       client, addr = proxy.accept()
-      task = ProxyTask(addr, client, connections, extensions)
+      task = ProxyTask(addr, client, store, extensions)
       task.daemon = True
       threads.append(task)
       task.start()
@@ -61,13 +61,11 @@ def main(argv):
     except KeyboardInterrupt:
       log("\n[*] Stopping proxy...")
       proxy.close()
-      log('[*] Terminating telemtry routine task...')
-      telemetry.stop()
       log("[*] Closing open proxy ports...")
       for task in threads:
         task.terminate()
-      log("[*] Closing open HTTP connections...")
-      connections.close_all()
+      log('[*] Terminating telemetry routine task...')
+      telemetry.stop()
       log("[*] Graceful Shutdown")
       sys.exit(1)
 
