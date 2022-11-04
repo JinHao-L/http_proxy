@@ -3,7 +3,7 @@ import sys
 import socket
 from typing import List
 
-from modules.telemetry import TelemetryStore, TelemetryTask
+from modules.telemetry import TelemetryStore
 from modules.tasks import ProxyTask
 from modules.logger import log
 from modules.extensions import *
@@ -41,19 +41,15 @@ def main(argv):
     sys.exit(2)
 
   # Create shared storage
-  store = TelemetryStore()
+  telemetry = TelemetryStore()
   threads: List[ProxyTask] = []
-
-  # Create telemetry task which runs every second
-  telemetry = TelemetryTask(store, 1)
-  telemetry.daemon = True
-  telemetry.start()
 
   # Start new proxy task for each proxy request
   while True:
     try:
       client, addr = proxy.accept()
-      task = ProxyTask(addr, client, store, extensions)
+      client.settimeout(30) # timeout if no response
+      task = ProxyTask(addr, client, telemetry, extensions)
       task.daemon = True
       threads.append(task)
       task.start()
@@ -64,8 +60,8 @@ def main(argv):
       log("[*] Closing open proxy ports...")
       for task in threads:
         task.terminate()
-      log('[*] Terminating telemetry routine task...')
-      telemetry.stop()
+      log('[*] Flush all telemetry log...')
+      telemetry.close_all()
       log("[*] Graceful Shutdown")
       sys.exit(1)
 
