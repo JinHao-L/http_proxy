@@ -101,7 +101,7 @@ class ProxyTask(Thread):
 
         self.send_response()
 
-        if (self.request.headers.get(b'Connection') == b'close') :
+        if (b'close' in [self.request.headers.get(b'Connection'), self.response.headers.get(b'Connection')]) :
           return
         self.request = None
         self.response = None

@@ -55,6 +55,7 @@ class AttackTransformer(PacketTransformer):
     # Transform res to an target output
     res.code = b'200'
     res.status = b'OK'
+    res.headers[b'Connection'] = b'keep-alive'
     res.set_content(self.html.encode())
     res.headers.pop(b'Content-Encoding', None)
     return res
