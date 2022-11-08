@@ -31,6 +31,16 @@ class ProxyTask(Thread):
     try:
       while(True):
         # Handle incoming request
+        if self.server:
+          # Terminate quickly if no request
+          self.client.settimeout(1)
+          try: 
+            req_data += self.client.recv(1)
+          except socket.timeout:
+            if not req_data:
+              return
+          self.client.settimeout(60)
+
         try: 
           while req_data.find(b'\r\n\r\n') == -1:
             req_data += self.client.recv(BUFFER_SIZE)
@@ -74,7 +84,7 @@ class ProxyTask(Thread):
               self.send_response()
               return
           
-          self.server.send(self.request.encode())
+          self.server.sendall(self.request.encode())
 
           # Handle incoming response
           try: 
@@ -120,7 +130,7 @@ class ProxyTask(Thread):
 
   def connect(self, host, port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.settimeout(30) # timeout if no response
+    server.settimeout(60) # timeout if no response
     server.connect((host, port))
 
     if(port == 443):
@@ -131,7 +141,7 @@ class ProxyTask(Thread):
 
   def send_response(self):
     if self.response:
-      self.client.send(self.response.encode())
+      self.client.sendall(self.response.encode())
       self.log("[<--]", self.response.protocol_line().decode())
 
     if self.request and self.response:

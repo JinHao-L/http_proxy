@@ -1,5 +1,4 @@
 import socket
-import ssl
 from threading import Thread, Lock, Event
 from datetime import datetime
 from typing import Dict

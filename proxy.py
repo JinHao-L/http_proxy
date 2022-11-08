@@ -48,7 +48,7 @@ def main(argv):
   while True:
     try:
       client, addr = proxy.accept()
-      client.settimeout(30) # timeout if no response
+      client.settimeout(60) # timeout if no response
       task = ProxyTask(addr, client, telemetry, extensions)
       task.daemon = True
       threads.append(task)
