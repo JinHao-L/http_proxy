@@ -32,6 +32,7 @@ def main(argv):
   # Start proxy listener
   try:
     proxy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    proxy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     proxy.bind(('', port))
     proxy.listen()
     log("[*] Proxy listening on port [ %s ]" % port)
